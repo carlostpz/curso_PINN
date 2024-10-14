@@ -28,6 +28,7 @@ def ode(t, NN, a, b, c, y,
     t = tf.constant(t, dtype = tf.float32)
     t_0 = tf.zeros((1))
 
+    # calculate NN'(t) and NN''(t)
     with tf.GradientTape(persistent=True) as tape2:
         tape2.watch(t)
         with tf.GradientTape(persistent=True) as tape:
@@ -40,25 +41,26 @@ def ode(t, NN, a, b, c, y,
     likelihood_loss = tf.reduce_sum( tf.square(y - f) )
 
     # ODE loss
-    with tf.GradientTape(persistent = True) as tape3:
-        tape3.watch(a)
-        tape3.watch(b)
-        tape3.watch(c)
-        
-        ode_loss = tf.reduce_sum( tf.square( a*f_tt + b*f_t + c*f - tf.math.exp(-1*t) ) )
-        tape3.gradient(ode_loss, a)
-        tape3.gradient(ode_loss, b)
-        tape3.gradient(ode_loss, c)
+    ode_loss = tf.reduce_sum( tf.square( a*f_tt + b*f_t + c*f - tf.math.exp(-1*t) ) )
+    
+    #with tf.GradientTape(persistent = True) as tape3:
+    #    tape3.watch(a)
+    #    tape3.watch(b)
+    #    tape3.watch(c)    
+    #    ode_loss = tf.reduce_sum( tf.square( a*f_tt + b*f_t + c*f - tf.math.exp(-1*t) ) )
+    #dL_da = tape3.gradient(ode_loss, a)
+    #dL_db = tape3.gradient(ode_loss, b)
+    #dL_dc = tape3.gradient(ode_loss, c)
     
     # loss for initial condition
-    IC_loss = tf.reduce_sum( tf.square( NN(t_0) + 1 ) ) # f(0) = y0
+    IC_loss = tf.reduce_sum( tf.square( NN(t_0) + 1 ) ) # f(0) = -1
 
     # loss for the boundary condition
     with tf.GradientTape(persistent=True) as tape0:
         tape0.watch(t_0)
         f_t0 = NN(t_0)
-        f_t_0 = tape0.gradient(f_t0, t_0)
-    boundary_loss = tf.square( f_t_0 - 2)
+    df_dt0 = tape0.gradient(f_t0, t_0)
+    boundary_loss = tf.square( df_dt0 - 2) # f'(0) = 2
 
     # prior loss
     prior_loss = -log_dnorm(x = a, mu = tf.zeros(1) + a_mu, sd = tf.ones(1)*a_sd ) 
@@ -81,13 +83,13 @@ NN = tf.keras.models.Sequential([
 
 # prior distributions for a, b, c
 a_mu = 1.0; a_sd = 0.0001
-b_mu = 0.0; b_sd = 10.0
+b_mu = 5.0; b_sd = 0.0001
 c_mu = 0.0; c_sd = 10.0
 optm = tf.keras.optimizers.Adam(learning_rate = 0.01)
 
-a = tf.Variable([1.5], trainable = True)
-b = tf.Variable([7.0], trainable = True)
-c = tf.Variable([4.0], trainable = True)
+a = tf.Variable([1.5], trainable = True, name = 'a')
+b = tf.Variable([7.0], trainable = True, name = 'b')
+c = tf.Variable([4.0], trainable = True, name = 'c')
 
 trainable = NN.trainable_variables
 trainable.append(a)
@@ -100,9 +102,12 @@ train_loss_record = np.zeros([n_epochs])
 a_record = np.zeros([n_epochs])
 b_record = np.zeros([n_epochs])
 c_record = np.zeros([n_epochs])
+
 for epoch in range(n_epochs):
     with tf.GradientTape() as tape:
-
+        
+        tape.watch(trainable)
+        
         train_loss = ode(t = train_t, 
                          NN = NN,
                          a = a,
@@ -115,16 +120,17 @@ for epoch in range(n_epochs):
                          c_mu = c_mu,
                          c_sd = c_sd,
                          y = train_f)
-        
-        # record training_loss and a
-        train_loss_record[epoch] = train_loss     
-        a_record[epoch] = a     
-        b_record[epoch] = b     
-        c_record[epoch] = c     
-
-        grad_w = tape.gradient(train_loss, trainable)
+            
+    grad_w = tape.gradient(train_loss, trainable)
     optm.apply_gradients(zip(grad_w, trainable ))
-        
+    
+    # record training_loss and ode parameters a, b, c
+    train_loss_record[epoch] = train_loss     
+    a_record[epoch] = a     
+    b_record[epoch] = b     
+    c_record[epoch] = c     
+
+
     if epoch % 100 == 0:
         print(f'Epoch {epoch}, Training loss: {train_loss.numpy()}, a: {a.numpy()}, b: {b.numpy()}, c: {c.numpy()}')
 
